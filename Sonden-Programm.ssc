@@ -1,0 +1,805 @@
+﻿/*
+	Programm für die CanSat-Sonde
+	(c) 2015 L3P3
+	(Das erste praktische Programm in SSC!)
+*/
+//Verknüpfungen
+	//Klasse für "unsigned Integer"
+		intU=mod.types.intU
+	//Anschluss
+		Port=fun(value)ret=mod.devices.ports[value]
+	//Liste mit Anschlüssen
+		PortArr=mod.devices.ports.cls
+	//Liste mit Boolen
+		BolArr=arr!{
+			.content=bol
+		}
+	//Klasse für Zeitspanne
+		Period=mod.time.period
+	//Funktion zur Vereinfachung
+		Seconds=fun(value)ret=Period!.fromSeconds(value)
+	//Analog-Digital-Wandler
+		adc=mod.devices.adc
+	//UART (Funk)
+		uart=mod.devices.uart[1]
+	//SPI
+		spi=mod.devices.spi[0]
+	//Interner EEPROM
+		eepInt=mod.devices.eeprom[0]
+	//Externer EEPROM
+		eepExt=mod.devices.eeprom[1]
+	//CPU
+		cpu=mod.devices.cpu[0]
+	//Aus einem uInt eine Liste mit Boolen machen
+		iu2bs=mod.bin.intUToBits
+	//Aus einer Liste mit Boolen einen uInt machen
+		bs2iu=mod.bin.bitsToInt8u
+	//Aus uInts Bits machen
+		ius2bs=mod.bin.intUsToBits
+	//Aus einer Liste mit Boolen mehrere Bytes machen
+		bs2bytes=mod.bin.bitsToInt8us
+
+//Verzögerungen
+	//Taktfrequenz einstellen auf 8MHz
+		cpu.delay=Seconds(/8e6)
+//Anschlüsse
+	ports{
+		//LEDs zum Blinken
+			.leds=PortArr!+[
+				//Rote LEDs
+					2
+					12
+				//Grüne LEDs
+					4
+					8
+				//Weiße LEDs
+					0
+					10
+			]
+		//Interne LEDs zum Blinken
+			.ledsInt=PortArr!+[
+				16
+				17
+				18
+				19
+				20
+				21
+				22
+				23
+			]
+		//Summer
+			.buzz=Port(14)//dp14
+		//Sensoren zum Messen
+			.sensors=PortArr!+[
+				//Luftdruck
+					50//a10
+				//Temperatur (LM-35)
+					40//a0
+				//Methan (MQ-2)
+					42//a2
+				//Isobutan (MQ-6)
+					44//a4
+				//Ammoniak (MQ-135)
+					45//a5
+			]
+	}
+//Analog-Digital-Wandler konfigurieren
+	adc{
+		//Verzögerung
+			//(Lieber automatisch berechnen lassen!)
+			//.delay=Seconds(/2e5)
+			//Nicht 200kHz, sondern 125kHz; wegen technischer Einschränkung
+		//Referenz
+			.reference=#external
+		//Einzelmessungs-Modus
+			.freeRun=0
+	}
+//Alarm
+	alarm{
+		//Blink- und Summ-Dauer
+			.toggleTime=Seconds(/3)
+		//Summer
+			.buzz{
+				//Eingeschaltet?
+				//Summer auf 0 setzen, wenn deaktiviert
+					.enabled.@change=fun if(~.)..state.reset!
+				//Stellung
+				//Summer-Port setzen
+					.state.@change=fun ports.buzz.set(.)
+				//Herunterzähler
+					counter{
+						.range.@change=fun ..counter.reset!
+						.loop=0
+						.@overflow=fun ..state~
+					}
+				//Kleine Aktionen
+					.tick=fun counter+=1
+				//Summer-Noten
+					notes=[
+						//Auflösung: Anzahl an 1024 Takten-1; Erste Note: etwa A, dann A+ usw., 64 insgesamt
+						255,255,246,232,219,206,195,184,173,163,154,145,137,129,122,115,109,102,97,91,86,81,76,72,68,64,60,57,54,50,48,45,42,40,37,35,33,31,29,28,26,24,23,22,20,19,18,17,16,15,14,13,12,11,11,10,9,9,8,8,7,7,6,6
+					]
+				//Frequenz auf Note setzen
+					.notePlay=fun(idx){
+						//Notenwechsel deaktivieren
+							.toggle.enabled=0
+						//Ton einstellen
+							counter.range=notes[idx]
+						//Summen aktivieren
+							.enabled=1
+					}
+				//Wechsel zwischen zwei Frequenzen
+					.toggle{
+						//Eingeschaltet?
+							.enabled=1
+						//Stellungen
+							states=[
+								//Tieferer Ton
+									7//1kHz
+								//Höherer Ton
+									3//2kHz
+							]
+						//Stellung
+							.state=.states.pointer!{
+								.loop=1
+								//Summ-Verzögerung einstellen
+									.@change=fun counter.range=states[.]
+							}
+					}
+			}
+		//Externer Blinker
+			.blink{
+				//Eingeschaltet?
+				//Alle LEDs ausschalten, wenn deaktiviert wird
+					.enabled.@change=fun if(~.)..state.reset!
+				//Stellungen
+					.states=[
+						//r,r,g,g,w,w
+						[0,0,0,0,0,0]
+						[1,0,0,0,0,0]
+						[0,0,0,0,0,0]
+						[0,0,1,0,0,0]
+						[0,0,0,0,0,0]
+						[0,0,0,0,1,0]
+						[0,0,0,0,0,0]
+						[0,1,0,0,0,0]
+						[0,0,0,0,0,0]
+						[0,0,0,1,0,0]
+						[0,0,0,0,0,0]
+						[0,0,0,0,0,1]
+					]
+				//Stellung
+					.state=states.pointer!{
+						.loop=1
+						//Die LEDs einstellen
+							.@change=fun lop(ports.leds)itm.set(states[.][idx])
+					}
+			}
+		//Interner Blinker
+			.blinkInt{
+				//Eingeschaltet?
+				//Alle LEDs ausschalten, wenn deaktiviert wird
+					.enabled.@change=fun if(~.)..state.reset!
+				//Richtung
+					.direction
+				//Stellungen
+					states=[
+						[1,0,0,0,1,0,0,0]
+						[0,1,0,0,0,1,0,0]
+						[0,0,1,0,0,0,1,0]
+						[0,0,0,1,0,0,0,1]
+					]
+				//Stellung
+					.state=states.pointer!{
+						.loop=1
+						//Die LEDs einstellen
+							.@change=fun lop(ports.ledsInt)itm.set(states[.][idx])
+					}
+			}
+		//Berechnet einen Schritt
+			.tack=fun{
+				//Blinken
+					.blink{
+						if(.enabled).state+=1
+					}
+					.blinkInt{
+						if(.enabled){
+							if(.direction).state+=1
+							els .state-=1
+						}
+					}
+				//Summen
+					.buzz.toggle{
+						if(.enabled).state+=1
+					}
+			}
+	}
+//SPI konfigurieren
+	spi{
+		//Bit-Reihenfolge
+			.dataOrder=0//msb,lsb
+		//Master/Slave?
+			.master=1
+		//Modus
+			.mode=0
+		//SCK einstellen
+			.ports#ss=7
+	}
+//Externen EEPROM definieren
+	eepExt{
+		.page{
+			.size=2^8
+			.count=2^12
+			.write=fun(addr,data){
+				//Warten, bis EEPROM bereit ist
+					wfr(~..busy)
+				//Verbindung öffnen
+					spi.open!
+				//Befehl, Adresse und Daten senden
+					lop([130]+bs2bytes(ui2bs(addr))+data)spi.sendSync(itm)
+				//Verbindung schließen
+					spi.close!
+			}
+		}
+		//Lesen
+			.read=fun(addr,length){
+				//Warten, bis EEPROM bereit ist
+					wfr(~.busy)
+				//Verbindung öffnen
+					spi.open!
+				//Befehl senden
+					lop([3]+bs2bytes(ui2bs(addr)))spi.sendSync(itm)
+				//Antwort empfangen
+					lop(length)ret.push(spi.sendSync(0))
+				//Verbindung schließen
+					spi.close!
+			}
+		//Ist der EEPROM noch beschäftigt?
+			.busy{
+				.@get=fun{
+					//Warten, bis SPI bereit ist
+						wfr(~spi.busy)
+					//Verbindung öffnen
+						spi.open!
+					//Befehl senden
+						spi.sendSync(215)
+					//Antwort empfangen
+						ret=~iu2bs(spi.sendSync(0))[0]
+					//Verbindung schließen
+						spi.close!
+				}
+				.@wait=fun{
+					//Warten, bis SPI bereit ist
+						wfr(~spi.busy)
+					//Verbindung öffnen
+						spi.open!
+					//Befehl senden
+						spi.sendSync(215)
+					//Antwort empfangen
+						wfr(iu2bs(spi.sendSync(0))[0])
+					//Verbindung schließen
+						spi.close!
+				}
+			}
+		//An- und ausschalten
+			.sleep=fun{
+				//Warten, bis EEPROM bereit ist
+					wfr(~.busy)
+				//Verbindung öffnen
+					spi.open!
+				//Befehl senden
+					spi.sendSync(185)
+				//Verbindung schließen
+					spi.close!
+			}
+			.wake=fun{
+				//Verbindung öffnen
+					spi.open!
+				//Befehl senden
+					spi.sendSync(171)
+				//Verbindung schließen
+					spi.close!
+			}
+	}
+//Speicherung im EEPROM
+	storage{
+		//EEPROM auf 256byte-Seiten konfigurieren
+			.check256=fun{
+				//Warten, bis EEPROM bereit ist
+					wfr(~eepExt.busy)
+				//Prüfen
+					//Verbindung öffnen
+						spi.open!
+					//Befehl senden
+						spi.sendSync(215)
+					//Antwort empfangen
+						is256=~iu2bs(spi.sendSync(0))[7]
+					//Verbindung schließen
+						spi.close!
+					//Wenn schon gesetzt, dann abbrechen
+						if(is256)brk
+				//Verbindung kappen
+					commun.kill!
+				//Setzen
+					//Verbindung öffnen
+						spi.open!
+					//Befehl senden
+						lop([61,42,128,166])spi.sendSync(itm)
+					//Verbindung schließen
+						spi.close!
+				//Signal
+					alarm{
+						.buzz.notePlay(3)
+						.blinkInt.enable=1
+					}
+			}
+		//Blockdaten
+			.block{
+				//Blocknummer in Adresse umwandeln
+					.convert=fun(blockNum)ret=bs2iu([0,0,0,0]+[0]+iu2bs(blockNum)+[0,0,0])
+				//Block abspeichern
+					.save=fun(bytes)eepExt.write(.convert(block.num),bytes)
+				//Block laden
+					.load=fun(blockNum)ret=eepExt.read(.convert(blockNum),8)
+			}
+		//Zustand
+			.state{
+				//Zustand laden
+					.load=fun{
+						bytes=eepInt.read(0,2)
+						if(bytes[0]==170)block.num=bs2iu(ius2bs(bytes.clip(1,2)))
+					}
+				//Zustand speichern
+					.save=fun eepInt.write(0,[170]+bs2bytes(iu2bs(block.num)))
+			}
+		//Bei Start
+			.state.load!
+	}
+//Kommunikation zur Bodenstation
+	commun{
+		//USB:UART0;Funk:UART1
+			uart{
+				//UART-Nummer
+					.id=1
+				//Baudrate einstellen auf 600Hz
+					.delay=Seconds(/600)
+				//Wenn Byte ankommt
+					.@receive=fun char.receive(.received)
+			}
+		//Magische Zahl #B7
+			magic=183
+		//Verbindung hergestellt?
+			connected=0
+		//Verzögerungszähler
+			.delayTick=fun{
+				char{
+					if(.state==(#receiveMagic|#receiveSignal|#receiveParams)).lastReceived+=1
+				}
+			}
+		//Versuchen, Byte zu senden
+			.trySend=fun{
+				if(~uart.busySend)char.send!
+			}
+		//Verbindung kappen
+			.kill=fun char.state=#disabled
+		//Zeichen
+			char{
+				//Zustand
+					.state=opt!+[
+						//Warte auf Befehl
+							#ready
+						//Empfängt, Magische Zahl angekommen
+							#receiveMagic
+						//Empfängt, Befehls-Art angekommen
+							#receiveSignal
+						//Empfängt, Parameter angekommen
+							#receiveParams
+						//Sendet
+							#sending
+						//Sendet, kein Unterbrechen
+							#sendingForce
+						//Verarbeitet Nachricht
+							#decoding
+						//Kommunikation deaktiviert
+							#disabled
+					]+#ready
+				//Zeit seit letztem empfangenen Byte
+					.lastReceived{
+						.range=7
+						//Nach etwa 0,1 Sekunden seit letztem Byte #02 senden
+							.@overflow=fun message.send(2)
+					}
+				//Zur Prüfsumme hinzufügen
+					.checksum{
+						.default=magic
+						.add=fun(byte).=mod.bin.xor(.copy,byte.copy)
+					}
+				//Empfangene Nachricht
+					incoming{
+						//Art
+							.signal=0
+						//Empfangene Parameterdaten
+							.paramData=[]
+						//Anzahl an Parameter-Bytes
+							.paramLength=0
+					}
+				//Zu sendende Nachricht
+					outgoing{
+						//Daten
+							.data=[]
+						//Zu sendenes Byte
+							.index=0
+					}
+				//Eingegangenes Byte verwerten
+					.receive=fun(byte){
+						//Zähler zurücksetzen
+							.lastReceived.reset!
+						swt(.state)[
+							//Wenn bereit
+								#ready:fun{
+									if(byte==magic){
+										.checksum.reset!
+										.state=#receiveMagic
+									}
+									els message.send(2)
+								}
+							//Wenn magische Zahl angekommen
+								#receiveMagic:fun{
+									length=message.lengths[byte]
+									//Wenn ungültiger Befehl, dann #02 senden.
+									if((~connected&byte~=1)|length==nul)message.send(2)
+									els{
+										incoming.signal=byte.copy
+										.checksum.add(byte)
+										if(length==0).state=#receiveParams
+										els{
+											.state=#receiveSignal
+											incoming{
+												.paramData.reset!
+												.paramLength=length.copy
+											}
+										}
+										
+									}
+								}
+							//Wenn Befehls-Art angekommen
+								#receiveSignal:fun{
+									incoming{
+										.paramData{
+											.push(byte.copy)
+											if(.length==..paramLength)..state=#receiveParams
+										}
+									}
+									.checksum.add(byte)
+								}
+							//Wenn Parameter angekommen
+								#receiveParams:fun{
+									if(byte==.checksum).state=#decoding
+									els message.send(2)
+								}
+							//Wenn gesendet wird
+								#sending:fun message.send(2)
+							//Sonst nichts tun
+								fun{}
+						]
+					}
+				//Nächstes Byte der Nachricht senden
+					.send=fun{
+						//Wenn nichts zum senden da ist, dann abbrechen
+							if(.state~=(#sending|#sendingForce))brk
+						outgoing{
+							uart.send(.data[.index])
+							if(.index==.data.length-1)..state=#ready
+							els .index+=1
+						}
+					}
+			}
+		//Nachrichten
+			message{
+				//Länge der Parameter der jeweiligen Nachrichten
+					.lengths=[0,0,0,0,3,0,0,0,0,0,0,0,0,176:1,177:1,178:2]
+				//Befehl empfangen
+					.receive=fun{
+						//Abbrechen, wenn keine Nachricht angekommen ist
+							if(char.state~=#decoding)brk
+						//Empfangsdaten
+							params=incoming.paramData
+						//Antwortdaten
+							reSignal=1//Nachricht erhalten
+							reParams=[]
+						//Über Signal auswählen, was getan werden soll
+							swt(incoming.signal)[
+								//Nichts tun
+									0:fun{}
+								//Verbindung (neu-)starten
+									1:fun connected=1
+								//Verbindung abbrechen
+									2:fun connected=0
+								//Aktuelle Messzeit senden
+									3:fun{
+										reSignal=3//Blocknummer
+										
+										reParams=[]{
+											//16bit Block-Nummer
+												.+=bs2bytes(iu2bs(block.num))
+											//8bit Bruch
+												.push(0)
+										}
+									}
+								//Blöcke senden
+									4:fun{
+										reSignal=4//Blöcke
+										//Nummer des ersten Blocks
+											firstBlock=bs2iu(iu2bs(params[0])+iu2bs(params[1]))
+										//Nummer des letzten Blocks in Nachricht
+											lastBlock{
+												if(firstBlock>block.num).=firstBlock
+												els{
+													.=firstBlock.copy+bs2iu(iu2bs(params[2]).clip(3,7))
+													if(.>firstBlock).=firstBlock
+													els if(.>block.num).=block.num
+												}
+											}
+										//Anzahl an zu sendenden Blöcken
+											blockCount=lastBlock-firstBlock
+										//Antwort
+											reParams=[
+												//Erster Block
+													params[0],params[1]
+												//Anzahl an Blöcken
+													blockCount
+											]
+										//Zeiger für Block
+											blockIdx=firstBlock.copy
+										//Blöcke hinzufügen
+											lop(blockIdx<lastBlock){
+												reParams+=storage.block.load(blockIdx)
+												blockIdx+=1
+											}
+									}
+								//Messen aktivieren
+									5:fun block.measureEnabled=1
+								//Messen deaktivieren
+									6:fun block.measureEnabled=0
+								//Summen aktivieren
+									7:fun{
+										alarm.buzz{
+											.enabled=1
+											//Notenwechsel aktivieren
+												.toggle.enabled=1
+										}
+									}
+								//Summen deaktivieren
+									8:fun{
+										alarm.buzz{
+											.enabled=0
+											//Notenwechsel aktivieren
+												.toggle.enabled=1
+										}
+									}
+								//Blinken aktivieren
+									9:fun alarm.blink.enabled=1
+								//Blinken deaktivieren
+									10:fun{
+										alarm.blink{
+											.enabled=0
+											.state=0
+										}
+									}
+								//Ausschalten
+									11:fun{
+										//Zustand speichern
+											storage.state.save!
+										//EEPROM-Modul ausschalten
+											eepExt.sleep!
+										//KK ausschalten
+											dev.power.shutdown!
+									}
+								//Blockspeicher klären
+									12:fun block.reset!
+								//Note spielen
+									176:fun{
+										//Notennummer aus Parameter holen
+											note=bs2iu(iu2bs(params[0]).clip(2,7))
+										alarm.buzz.notePlay(note)
+									}
+								//Blinker setzen
+									177:fun{
+										alarm{
+											//Blinken deaktivieren
+												.blink.enabled=0
+											//Parameter-Bits
+												bits=iu2bs(params[0])
+											//Außen-LEDs einstellen
+												lop(bits.clip(0,5))ports.leds[idx].set(itm)
+											//Innerer Blinker
+												.blinkInt{
+													.enabled=bits[6]
+													.direction=bits[7]
+												}
+										}
+									}
+								//Blocknummer setzen
+									178:fun block.num=bs2iu(iu2bs(params[0])+iu2bs(params[1]))
+							]
+						//Antworten
+							.send(reSignal,reParams)
+					}
+				//Antwort senden
+					.send=fun(signal,params){
+						char{
+							//Nachricht generieren
+								.outgoing{
+									//Daten zurücksetzen
+										.data.reset!
+									//Bytes hinzufügen
+										//Magische Zahl
+											.data.push(magic.copy)
+											..checksum.reset!
+										//Signal
+											.data.push(signal)
+											..checksum.add(signal)
+										//Parameter
+											if(params~=nul){
+												.data+=params
+												lop(params)..checksum.add(itm)
+											}
+										//Prüfsumme
+											.data.push(..checksum)
+									//Zeiger auf Anfang setzen
+										.index.reset!
+								}
+							//Status einstellen
+								.state{
+									//#02 erzwingen und Verbindung abbrechen
+										if(signal==2){
+											.=#sendingForce
+											connected=0
+										}
+									//Für andere Antworten nicht
+										els .=#sending
+								}
+							//Erstes Byte senden
+								wfr(~uart.busyOut)
+								.send!
+						}
+					}
+			}
+		//Einen großen Schritt weiterarbeiten
+			.tack=fun message.receive!
+	}
+//Block-Regelungen
+	block{
+		//Zeitraum für Blöcke
+			.delay=Seconds(/15)
+		//Erster Block?
+			.first=1
+		//Darf nächster Block beginnen?
+			.next=1
+		//Aktuelle Block-Nummer
+			.num=mod.types.int16u!
+		//Messen und Speichern aktiv?
+			.measureEnabled=0
+		//Messungen pro Block
+			.measuresCount=((.delay-alarm.tack.timeRunMax/blocksPerAlarmChange-backWork.timeRunMax-Block.save.timRunMax)/measure.timeRunMax).roundDown(mod.math.sets.power(base:2))
+		//Blöcke bis nächste Speicherung
+			.nextSave=150
+		//Daten löschen
+			.reset=fun{
+				.num.reset!
+				storage.state.save!
+			}
+	}
+//Klasse für Blöcke
+	Block=obj+{
+		//Liste mit Messwerten
+			.measures=arr+{
+				//Inhalt: Unsignierter Integer 12bit
+					.content=intU+{
+						.range=2^12
+					}
+			}
+		//Messwerte reintun
+			.addMeasures=fun(measures){
+				//Zusammenaddierte Messwerte in 12bit umrechnen
+					lop(.measures)itm=.measures.content.range*(measures[idx]/measures.content.range)
+			}
+		//Block abspeichern
+			.save=fun storage.block.save(bs2bytes(ius2bs(.measures)+[0,0,0,0]))
+	}
+//Viele Dinge, die zu tun sind
+	backWork=fun{
+		commun.tack!
+		//Nur jeden 150. Block (alle 10 Sek.) Blocknummer speichern
+			if(block.nextSave==0){
+				block.nextSave.reset!
+				storage.state.save!
+			}
+			els block.nextSave-=1
+	}
+//Funktion für einen Messdurchgang
+	measure=fun(measures){
+		//Alle Sensoren nacheinander auslesen
+		lop(ports.sensors){
+			//Messung starten
+				adc.measure(itm)
+			//Warten, bis alle ADCs bereit sind
+				wfr(~adc.busy)
+			//Messergebnisse dazuaddieren
+				measures[idx]+=(2^10)*adc.result
+		}
+	}
+//EEPROM auf Format überprüfen
+	storage.check256!
+//Verzögerung
+	//Multiplizierer
+		timeDef{
+			.a{
+				.range=4
+				.loop=1
+				//Neuer Block (~15 Hz)
+					.@overflow=fun block.next=1
+			}
+			.b{
+				.range=130
+				.loop=1
+				.@overflow=fun{
+					//Verzögerungszähler für Kommunikation (~60 Hz)
+						commun.delayTick!
+					..a+=1
+				}
+			}
+		}
+	//Uhr
+		mod.time.timer!{
+			//Verzögerung
+				.delay=cpu.delay*1024
+			//Aktion bei Ende
+				.@end=fun{
+					//Byte senden, wenn vorhanden
+						commun.trySend!
+					//Summerstellung (Alle 1024 Takte; ~7,813 kHz)
+						if(alarm.buzz.enabled)alarm.buzz.tick!
+					timeDef.b+=1
+				}
+			//Unendlich wiederholen
+				.runs=/0
+		}
+//Endlosschleife
+	lop{
+		alarm.tack!
+		//So viele Blöcke machen, bis nächste Alarm-Änderung eintrifft
+			lop(alarm.toggleTime/block.delay)block{
+				//Große Dinge machen
+					backWork!
+				//Warten, bis nächster Block beginnen kann
+					wfr(.next)
+				//Noch keinen neuen Block anfangen
+					.next=0
+				//Block zusammenstellen, wenn Messen aktiviert ist
+					if(.measureEnabled&.num<.num.max){
+						//Block-Nummer setzen
+							if(.first){
+								.first=0
+							}
+							els{
+								.num+=1
+							}
+						//Messdaten
+							measures=arr!{
+								.content=intU+{
+									.range=(2^10)*measuresPerBlock
+								}
+								.length=ports.sensors.length
+							}
+						//Messungen durchführen
+							lop(measuresPerBlock)measure(measures)
+						//Block mit Durchschnitswerten
+							Block!{
+									.addMeasures(measures)
+								//Block speichern
+									.save!
+							}
+					}
+			}
+	}

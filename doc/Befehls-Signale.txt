@@ -1,0 +1,37 @@
+Am Anfang immer:
+	#B7
+
+Befehls-Code (Byte) | Befehl
+	Bodenstation→Sonde:
+		#00: Nichts tun (Verbindung überprüfen)
+		#01: Verbindung (neu-)starten
+		#02: Verbindung abbrechen
+		#03: Aktuelle Messzeit senden
+		#04: Blöcke senden [Ab Block; 1byte max. Anzahl]
+		#05: Messen aktivieren
+		#06: Messen deaktivieren
+		#07: Summer aktivieren und Summerfrequenzwechsel an
+		#08: Summer deaktivieren
+		#09: Blinker aktivieren
+		#0A: Blinker deaktivieren
+		#0B: Sonde ausschalten
+		#0C: EEPROM leeren
+		Geheim:
+			#B0: Summerfrequenz setzen, Summerfrequenzwechsel aus und Summer an; Parameter: 1byte{2bit 0;6bit Notennummer}
+			#B1: Blinken aus und Lampen auf Zustand setzen; Parameter: 1byte{6bit Zustände;1bit Intern an/aus; 1bit Intern Richtung}
+			#B2: Block-Nummer setzen; Parameter: 2byte Nummer
+		Nicht erlaubt:
+			#B7: Wegen Problempotenzial
+
+	Sonde→Bodenstation:
+		#01: Nachricht erhalten
+		#02: Ungültige Nachricht erhalten
+		#03: Aktuelle Messzeit [Block; Fortschritt]
+		#04: Blöcke [Erster Block; Anzahl; Daten]
+
+Am Ende immer:
+	1byte XOR-Prüfsumme
+
+---
+Block-Aufbau
+11111111 11112222 22222222 3333333 333334444 44444444 55555555 5555T000
